@@ -1,13 +1,10 @@
 /**
  * User repository — the only place that talks to the DB for users.
  *
- * Repositories isolate persistence from business logic: services depend on
- * these methods, not on Prisma directly. That means the storage layer can
- * change (different ORM, add caching) without touching service code, and it
- * keeps queries in one testable, mockable place.
- *
- * `publicUserSelect` guarantees passwordHash is never selected into objects
- * that flow toward the API.
+ * `role` is stored as a plain string in the schema (for SQLite/Postgres
+ * portability), so Prisma types it as `string`. The domain type `PublicUser`
+ * narrows it to `Role` ("USER" | "ADMIN"). This repository is the boundary that
+ * maps the raw row to the domain type via `toPublicUser`.
  */
 import { prisma } from "@/lib/prisma";
 import type { PublicUser, Role } from "@/types";
@@ -22,34 +19,46 @@ const publicUserSelect = {
   updatedAt: true,
 } as const;
 
+/** Raw shape returned by Prisma for the selected fields (role is a string). */
+type RawUser = Omit<PublicUser, "role"> & { role: string };
+
+/** Map a raw DB row to the domain type, narrowing `role` to `Role`. */
+function toPublicUser(row: RawUser): PublicUser {
+  return { ...row, role: row.role as Role };
+}
+
 export const userRepository = {
   /** Full record including passwordHash — used only for auth (login). */
   findByEmailWithHash(email: string) {
     return prisma.user.findUnique({ where: { email } });
   },
 
-  findById(id: string): Promise<PublicUser | null> {
-    return prisma.user.findUnique({ where: { id }, select: publicUserSelect });
+  async findById(id: string): Promise<PublicUser | null> {
+    const user = await prisma.user.findUnique({ where: { id }, select: publicUserSelect });
+    return user ? toPublicUser(user) : null;
   },
 
-  create(data: {
+  async create(data: {
     name: string;
     email: string;
     passwordHash: string;
     role?: Role;
   }): Promise<PublicUser> {
-    return prisma.user.create({ data, select: publicUserSelect });
+    const user = await prisma.user.create({ data, select: publicUserSelect });
+    return toPublicUser(user);
   },
 
-  update(
+  async update(
     id: string,
     data: Partial<{ name: string; email: string; role: Role }>,
   ): Promise<PublicUser> {
-    return prisma.user.update({ where: { id }, data, select: publicUserSelect });
+    const user = await prisma.user.update({ where: { id }, data, select: publicUserSelect });
+    return toPublicUser(user);
   },
 
-  delete(id: string): Promise<PublicUser> {
-    return prisma.user.delete({ where: { id }, select: publicUserSelect });
+  async delete(id: string): Promise<PublicUser> {
+    const user = await prisma.user.delete({ where: { id }, select: publicUserSelect });
+    return toPublicUser(user);
   },
 
   /** Admin: list all users with a task count, most recent first. */
@@ -58,10 +67,10 @@ export const userRepository = {
       select: { ...publicUserSelect, _count: { select: { tasks: true } } },
       orderBy: { createdAt: "desc" },
     });
-    type UserWithCount = PublicUser & { _count: { tasks: number } };
-    return (users as UserWithCount[]).map((u) => {
+    type RawUserWithCount = RawUser & { _count: { tasks: number } };
+    return (users as RawUserWithCount[]).map((u) => {
       const { _count, ...rest } = u;
-      return { ...rest, taskCount: _count.tasks };
+      return { ...toPublicUser(rest), taskCount: _count.tasks };
     });
   },
 
