@@ -1,0 +1,59 @@
+// ─────────────────────────────────────────────────────────────
+// Prisma schema for TaskFlow
+//
+// Default provider is SQLite for zero-setup local runs. To switch to
+// PostgreSQL, change `provider` below to "postgresql" and update
+// DATABASE_URL in .env (see .env.example for the exact steps).
+//
+// Enums (Role, TaskStatus, TaskPriority) are modeled as strings for
+// SQLite compatibility, but validated strictly at the app layer via Zod,
+// so invalid values can never reach the database.
+// ─────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Application user. Passwords are never stored in plaintext — only the
+/// bcrypt hash is persisted, and it is never returned by the API.
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  // "USER" | "ADMIN". Enforced by Zod + the ROLES constant at the app layer.
+  role         String   @default("USER")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tasks Task[]
+
+  @@index([email])
+}
+
+/// A task owned by exactly one user (User 1 ──▶ Many Task).
+/// Deleting a user cascades to their tasks.
+model Task {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  // "PENDING" | "IN_PROGRESS" | "COMPLETED"
+  status      String    @default("PENDING")
+  // "LOW" | "MEDIUM" | "HIGH"
+  priority    String    @default("MEDIUM")
+  dueDate     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([priority])
+}
